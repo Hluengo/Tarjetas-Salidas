@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Calibri", "Inter", ui-sans-serif, system-ui, sans-serif;
+  
+  /* Define colors as hex to avoid oklch issues with html2canvas/html2pdf */
+  --color-emerald-50: #ecfdf5;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-700: #047857;
+  --color-emerald-800: #065f46;
+  --color-emerald-900: #064e3b;
+
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+
+  --color-blue-50: #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-600: #2563eb;
+  --color-blue-700: #1d4ed8;
+}
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900;
+    font-family: var(--font-sans);
+  }
+}
+
+@media print {
+  @page {
+    size: 216mm 330mm;
+    margin: 0;
+  }
+
+  body {
+    background: white;
+    margin: 0;
+    padding: 0;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-page {
+    width: 216mm;
+    height: 330mm;
+    padding: 20mm 10mm;
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: repeat(2, 85mm);
+    grid-template-rows: repeat(4, 55mm);
+    gap: 15mm 10mm;
+    justify-content: center;
+    align-content: start;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  /* Ensure the last page doesn't have a forced break if not needed, 
+     though break-after: page is usually fine */
+}
+
+/* Screen preview styles */
+.preview-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+  padding: 2rem;
+  background: #f1f5f9;
+  min-height: 100%;
+}
+
+.preview-page {
+  background: white;
+  width: 216mm;
+  height: 330mm;
+  padding: 20mm 10mm;
+  box-sizing: border-box;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  display: grid;
+  grid-template-columns: repeat(2, 85mm);
+  grid-template-rows: repeat(4, 55mm);
+  gap: 15mm 10mm;
+  justify-content: center;
+  align-content: start;
+}

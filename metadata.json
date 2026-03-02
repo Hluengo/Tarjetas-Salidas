@@ -1,0 +1,5 @@
+{
+  "name": "Generador de Tarjetas de Salida Pedagógica",
+  "description": "Herramienta para la creación e impresión masiva de tarjetas de salida para alumnos, configurada para tamaño Oficio/Legal.",
+  "requestFramePermissions": []
+}
