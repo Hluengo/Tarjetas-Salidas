@@ -1,7 +1,8 @@
-import React, { useState, useMemo, useRef } from 'react';
-import { Printer, Users, CheckSquare, Square, ChevronRight, School, Download, Info } from 'lucide-react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { Printer, Users, CheckSquare, Square, ChevronRight, School, Download, Info, RefreshCw, Database } from 'lucide-react';
 // @ts-ignore - html2pdf doesn't have standard types
 import html2pdf from 'html2pdf.js';
+import Papa from 'papaparse';
 
 // --- Types ---
 interface Student {
@@ -99,15 +100,150 @@ const Card = ({ student, teacher }: { student: Student; teacher: string; key?: s
 };
 
 export default function App() {
-  const [selectedCourseId, setSelectedCourseId] = useState(MOCK_DATA[0].id);
-  const [teacherName, setTeacherName] = useState(MOCK_DATA[0].defaultTeacher);
+  const [sheetId, setSheetId] = useState(() => localStorage.getItem('gsheet_id') || '');
+  const [dynamicData, setDynamicData] = useState<CourseData[]>([]);
+  const [teachers, setTeachers] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const activeData = dynamicData.length > 0 ? dynamicData : MOCK_DATA;
+
+  const [selectedCourseId, setSelectedCourseId] = useState(activeData[0].id);
+  const [teacherName, setTeacherName] = useState(activeData[0].defaultTeacher);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
 
+  // Update selection when data changes
+  useEffect(() => {
+    if (activeData.length > 0) {
+      const firstCourse = activeData[0];
+      setSelectedCourseId(firstCourse.id);
+      setTeacherName(firstCourse.defaultTeacher);
+    }
+  }, [dynamicData]);
+
+  const fetchSheetsData = async () => {
+    let id = sheetId.trim();
+    
+    // Extract ID from URL if user pasted a full link
+    if (id.includes('docs.google.com/spreadsheets/d/')) {
+      const matches = id.match(/\/d\/(?:e\/)?([a-zA-Z0-9-_]+)/);
+      if (matches && matches[1]) {
+        id = matches[1];
+        setSheetId(id);
+      }
+    }
+
+    if (!id) {
+      setError('Por favor ingresa un ID o URL de Google Sheet');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    localStorage.setItem('gsheet_id', id);
+
+    try {
+      const fetchSheet = (name: string) => 
+        new Promise<any[]>((resolve, reject) => {
+          const isPublishedToken = id.startsWith('2PACX-');
+          const url = isPublishedToken 
+            ? `https://docs.google.com/spreadsheets/d/e/${id}/pub?output=csv&sheet=${encodeURIComponent(name)}`
+            : `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`;
+          
+          Papa.parse(url, {
+            download: true,
+            header: true,
+            skipEmptyLines: true,
+            complete: (results) => {
+              if (results.data && results.data.length > 0) {
+                // Check if we actually got columns or just an error message from Google
+                const firstRow = results.data[0];
+                const columnCount = Object.keys(firstRow).length;
+                if (columnCount <= 1 && !firstRow[Object.keys(firstRow)[0]]) {
+                  reject(new Error(`La pestaña "${name}" no tiene datos o no existe.`));
+                } else {
+                  resolve(results.data);
+                }
+              } else {
+                reject(new Error(`No se encontraron datos en la pestaña "${name}".`));
+              }
+            },
+            error: (err) => reject(new Error(`Error de conexión al leer la pestaña "${name}".`))
+          });
+        });
+
+      const [estudiantesRaw, docentesRaw] = await Promise.all([
+        fetchSheet('estudiante'),
+        fetchSheet('docente')
+      ]);
+
+      // Helper to find value by flexible key name
+      const getValue = (row: any, possibleKeys: string[]) => {
+        const keys = Object.keys(row);
+        const foundKey = keys.find(k => {
+          const normalizedK = k.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          return possibleKeys.some(pk => normalizedK.includes(pk.toLowerCase()));
+        });
+        return foundKey ? row[foundKey] : null;
+      };
+
+      // Process teachers as a simple list
+      const teacherList: string[] = docentesRaw
+        .map((d: any) => {
+          const name = getValue(d, ['nombre', 'apellido', 'docente', 'profesor', 'maestro']);
+          return (name || '').toString().trim();
+        })
+        .filter(name => name !== '');
+      
+      setTeachers(teacherList);
+
+      // Process students and group by course
+      const coursesMap = new Map<string, CourseData>();
+      estudiantesRaw.forEach((s: any, index: number) => {
+        const name = getValue(s, ['nombre', 'apellido', 'estudiante', 'alumno']);
+        const courseName = getValue(s, ['curso', 'grado', 'nivel']);
+        
+        if (name && courseName) {
+          const nameStr = name.toString().trim();
+          const courseStr = courseName.toString().trim();
+          const courseKey = courseStr.toUpperCase();
+          
+          if (!coursesMap.has(courseKey)) {
+            coursesMap.set(courseKey, {
+              id: courseKey,
+              name: courseStr,
+              defaultTeacher: teacherList[0] || 'SIN PROFESOR ASIGNADO',
+              students: []
+            });
+          }
+          coursesMap.get(courseKey)!.students.push({
+            id: `gs-${index}`,
+            name: nameStr,
+            course: courseStr
+          });
+        }
+      });
+
+      const newData = Array.from(coursesMap.values());
+      if (newData.length === 0) {
+        throw new Error('No se encontraron datos válidos en las hojas. Revisa los nombres de las columnas.');
+      }
+      
+      setDynamicData(newData);
+      alert('¡Datos sincronizados con éxito!');
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Error al leer Google Sheets. Asegúrate de que el documento esté "Publicado en la Web".');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const currentCourse = useMemo(() => 
-    MOCK_DATA.find(c => c.id === selectedCourseId) || MOCK_DATA[0]
-  , [selectedCourseId]);
+    activeData.find(c => c.id === selectedCourseId) || activeData[0]
+  , [selectedCourseId, activeData]);
 
   const toggleStudent = (id: string) => {
     const newSet = new Set(selectedStudentIds);
@@ -133,7 +269,7 @@ export default function App() {
 
   const selectedStudents = useMemo(() => {
     const allSelected: Student[] = [];
-    MOCK_DATA.forEach(course => {
+    activeData.forEach(course => {
       course.students.forEach(student => {
         if (selectedStudentIds.has(student.id)) {
           allSelected.push(student);
@@ -141,7 +277,7 @@ export default function App() {
       });
     });
     return allSelected;
-  }, [selectedStudentIds]);
+  }, [selectedStudentIds, activeData]);
 
   // Group students into pages of 8 (4 rows x 2 columns)
   const pages = useMemo(() => {
@@ -212,6 +348,35 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          {/* Google Sheets Config */}
+          <section className="bg-slate-50 border border-slate-200 p-3 rounded-lg space-y-3">
+            <div className="flex items-center gap-2 text-slate-700">
+              <Database className="w-4 h-4" />
+              <span className="text-xs font-bold uppercase tracking-wider">Base de Datos (Sheets)</span>
+            </div>
+            <div className="space-y-2">
+              <input 
+                type="text"
+                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:ring-2 focus:ring-emerald-500 outline-none"
+                placeholder="ID de la Planilla..."
+                value={sheetId}
+                onChange={(e) => setSheetId(e.target.value)}
+              />
+              <button 
+                onClick={fetchSheetsData}
+                disabled={isLoading}
+                className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white py-1.5 rounded-lg font-semibold text-xs hover:bg-emerald-700 transition-all disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
+                {isLoading ? 'Sincronizando...' : 'Sincronizar Datos'}
+              </button>
+            </div>
+            {error && <p className="text-[10px] text-red-500 leading-tight">{error}</p>}
+            <p className="text-[9px] text-slate-400 italic">
+              * El documento debe estar "Publicado en la web".
+            </p>
+          </section>
+
           {/* Course Selector */}
           <section>
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
@@ -221,29 +386,42 @@ export default function App() {
               className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
               value={selectedCourseId}
               onChange={(e) => {
-                const course = MOCK_DATA.find(c => c.id === e.target.value);
+                const course = activeData.find(c => c.id === e.target.value);
                 setSelectedCourseId(e.target.value);
                 if (course) setTeacherName(course.defaultTeacher);
               }}
             >
-              {MOCK_DATA.map(course => (
+              {activeData.map(course => (
                 <option key={course.id} value={course.id}>{course.name}</option>
               ))}
             </select>
           </section>
 
-          {/* Teacher Input */}
+          {/* Teacher Selector */}
           <section>
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
               Profesor a Cargo
             </label>
-            <input 
-              type="text"
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
-              value={teacherName}
-              onChange={(e) => setTeacherName(e.target.value)}
-              placeholder="Nombre del profesor..."
-            />
+            {teachers.length > 0 ? (
+              <select 
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+                value={teacherName}
+                onChange={(e) => setTeacherName(e.target.value)}
+              >
+                <option value="">Seleccionar profesor...</option>
+                {teachers.map((t, idx) => (
+                  <option key={idx} value={t}>{t}</option>
+                ))}
+              </select>
+            ) : (
+              <input 
+                type="text"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+                value={teacherName}
+                onChange={(e) => setTeacherName(e.target.value)}
+                placeholder="Nombre del profesor..."
+              />
+            )}
           </section>
 
           {/* Student List */}
